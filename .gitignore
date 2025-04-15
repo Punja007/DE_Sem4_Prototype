@@ -12,3 +12,11 @@ __pycache__/
 # Ignore OS/system files
 .DS_Store
 Thumbs.db
+
+
+venv/
+
+chunk_data.pkl
+chunks.npy
+faiss_index.index
+transcript_temp.txt
