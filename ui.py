@@ -1,30 +1,27 @@
-# ✅ streamlit_chatbot.py
-# Streamlit chatbot that handles video link or topic input in one flow
-
 import streamlit as st
+from youtube_api import search_youtube_videos
+from captions import get_captions
+from sentence_transformers import SentenceTransformer
 import numpy as np
 import faiss
 import requests
-from sentence_transformers import SentenceTransformer
-from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_search import YoutubeSearch
 
+# Load sentence transformer model
 model = SentenceTransformer('all-MiniLM-L6-v2')
-OPENROUTER_API_KEY = "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"  # Replace with your key
-conversation_history = []
+OPENROUTER_API_KEY = "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"  # Replace with your key
 
-def fetch_transcript(video_id):
-    transcript = YouTubeTranscriptApi.get_transcript(video_id)
-    chunks = []
-    temp_chunk = ""
-    for entry in transcript:
-        if len(temp_chunk) + len(entry['text']) < 500:
-            temp_chunk += " " + entry['text']
-        else:
-            chunks.append(temp_chunk.strip())
-            temp_chunk = entry['text']
-    chunks.append(temp_chunk.strip())
-    return chunks
+# Message history for conversation context
+if "history" not in st.session_state:
+    st.session_state.history = [{"role": "system", "content": "You are a helpful tutor bot."}]
+    st.session_state.index = None
+    st.session_state.chunks = []
+
+def get_video_id_from_link(link):
+    if "v=" in link:
+        return link.split("v=")[1].split("&")[0]
+    elif "youtu.be/" in link:
+        return link.split("youtu.be/")[1]
+    return None
 
 def embed_and_index_chunks(chunks):
     embeddings = model.encode(chunks)
@@ -34,46 +31,30 @@ def embed_and_index_chunks(chunks):
 
 def ask_openrouter(messages):
     url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "mistralai/mistral-7b-instruct",
-        "messages": messages,
-        "temperature": 0.7
-    }
+    headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"}
+    payload = {"model": "mistralai/mistral-7b-instruct", "messages": messages, "temperature": 0.7}
     response = requests.post(url, headers=headers, json=payload)
     try:
         data = response.json()
         return data["choices"][0]["message"]["content"]
-    except Exception as e:
+    except Exception:
         return "⚠️ Something went wrong with OpenRouter."
 
-def get_video_id_from_link(link):
-    if "v=" in link:
-        return link.split("v=")[1].split("&")[0]
-    elif "youtu.be/" in link:
-        return link.split("youtu.be/")[1]
-    return None
-
-def search_youtube_videos(query):
-    results = YoutubeSearch(query, max_results=5).to_dict()
-    return results
+def fetch_transcript_and_prepare_memory(video_url):
+    video_id = get_video_id_from_link(video_url)
+    if video_id:
+        transcript = get_captions(video_url)
+        if "Error" in transcript:
+            return None, transcript
+        chunks = [transcript[i:i+500] for i in range(0, len(transcript), 500)]
+        index, chunks = embed_and_index_chunks(chunks)
+        return index, chunks
+    return None, "Invalid YouTube URL"
 
 # ------------------------ UI Starts Here ------------------------
+
 st.set_page_config(page_title="RAG Chatbot", layout="centered")
 st.title("🎥 YouTube Transcript Chatbot")
-
-if "index" not in st.session_state:
-    st.session_state.index = None
-    st.session_state.chunks = []
-    st.session_state.history = [
-        {"role": "system", "content": (
-            "You are a helpful tutor chatbot that reads YouTube transcripts and answers user questions."
-            " You remember previous messages and answer helpfully even if the question is off-topic."
-        )}
-    ]
 
 if st.session_state.index is None:
     input_type = st.radio("Do you have a YouTube link?", ("Yes", "No"))
@@ -81,32 +62,31 @@ if st.session_state.index is None:
     if input_type == "Yes":
         url = st.text_input("Paste your YouTube link:")
         if url:
-            video_id = get_video_id_from_link(url)
-            if video_id:
-                with st.spinner("Fetching transcript and preparing memory..."):
-                    chunks = fetch_transcript(video_id)
-                    index, chunks = embed_and_index_chunks(chunks)
+            with st.spinner("Fetching transcript and preparing memory..."):
+                index, chunks = fetch_transcript_and_prepare_memory(url)
+                if index:
                     st.session_state.index = index
                     st.session_state.chunks = chunks
                     st.success("Ready to chat!")
-            else:
-                st.error("❌ Invalid YouTube link")
-
+                else:
+                    st.error(f"❌ {chunks}")
     else:
         topic = st.text_input("Enter video topic:")
         if topic:
             results = search_youtube_videos(topic)
             for i, r in enumerate(results):
-                st.write(f"{i+1}. [{r['title']}]('https://www.youtube.com{r['url_suffix']}')")
+                st.write(f"{i+1}. [{r['title']}]({r['url']}) — *{r['channel']}*")
             choice = st.number_input("Choose video (1-5):", min_value=1, max_value=5, step=1)
             if st.button("Load selected video"):
-                video_id = results[choice - 1]['url_suffix'].split('v=')[1]
+                video_url = results[choice - 1]['url']
                 with st.spinner("Fetching transcript and preparing memory..."):
-                    chunks = fetch_transcript(video_id)
-                    index, chunks = embed_and_index_chunks(chunks)
-                    st.session_state.index = index
-                    st.session_state.chunks = chunks
-                    st.success("Ready to chat!")
+                    index, chunks = fetch_transcript_and_prepare_memory(video_url)
+                    if index:
+                        st.session_state.index = index
+                        st.session_state.chunks = chunks
+                        st.success("Ready to chat!")
+                    else:
+                        st.error(f"❌ {chunks}")
 
 # ------------------------ Chat UI ------------------------
 

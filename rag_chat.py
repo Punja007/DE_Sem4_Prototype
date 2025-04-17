@@ -9,22 +9,31 @@ index = faiss.read_index("faiss_index.index")
 chunks = np.load("chunks.npy", allow_pickle=True)
 
 # 🔐 OpenRouter API Key
-OPENROUTER_API_KEY = "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"
+url = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_API_KEY = "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"
 
 # 🧠 Message memory
 conversation_history = [
-    {"role": "system", "content": "You are a helpful, friendly tutor bot. Always answer in a clear and engaging way."}
+    {
+        "role": "system",
+        "content": (
+            "You are a highly intelligent and helpful AI tutor bot. "
+            "You read YouTube video transcripts and answer questions from users clearly, concisely, and informatively. "
+            "You remember everything the user says during the session and can respond to both context-based and general questions. "
+            "Always prioritize answering the user's intent. If the query is unrelated to the transcript, still respond helpfully."
+        )
+    }
 ]
 
-def ask_openrouter(conversation_history):
-    url = "https://openrouter.ai/api/v1/chat/completions"
+def ask_openrouter(messages):
+
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
         "model": "mistralai/mistral-7b-instruct",
-        "messages": conversation_history,
+        "messages": messages,
         "temperature": 0.7
     }
 
@@ -33,9 +42,9 @@ def ask_openrouter(conversation_history):
         data = response.json()
         return data["choices"][0]["message"]["content"]
     except Exception as e:
-        print("💥 OpenRouter messed up:", str(e))
-        print("📦 Raw response:", response.text)
-        return "Error"
+        print("\n💥 OpenRouter messed up:", str(e))
+        print("\n📦 Raw response:", response.text)
+        return "Sorry, something went wrong."
 
 print("🤖 Ready to answer your questions about the video!")
 
@@ -45,26 +54,24 @@ while True:
         print("👋 Bye Bye.")
         break
 
-    # Search for relevant chunk from transcript
+    # Add user message first to maintain order in conversation
+    conversation_history.append({"role": "user", "content": query})
+
+    # Find the best matching chunk
     query_embedding = model.encode([query])
     D, I = index.search(query_embedding, k=1)
     matched_chunk = chunks[I[0][0]]
 
-    # Inject chunk context into memory for this query
+    # Add context if it makes sense
+    context_note = f"Relevant video context: {matched_chunk}\n"
     conversation_history.append({
         "role": "user",
-        "content": f"""Context from YouTube transcript:
----
-{matched_chunk}
----
-Now answer this question: {query}"""
+        "content": context_note + "Now answer based on above context and our chat history."
     })
 
-    # Get response and store it
+    # Get response and print
     answer = ask_openrouter(conversation_history)
     print("\n🧠 Answer:", answer)
 
-    conversation_history.append({
-        "role": "assistant",
-        "content": answer
-    })
+    # Store the assistant response
+    conversation_history.append({"role": "assistant", "content": answer})
